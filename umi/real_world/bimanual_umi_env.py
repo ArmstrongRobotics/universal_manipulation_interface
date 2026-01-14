@@ -8,6 +8,7 @@ from multiprocessing.managers import SharedMemoryManager
 from umi.real_world.rtde_interpolation_controller import RTDEInterpolationController
 from umi.real_world.wsg_controller import WSGController
 from umi.real_world.franka_interpolation_controller import FrankaInterpolationController
+from umi.real_world.xarm_interpolation_controller import XArmInterpolationController
 from umi.real_world.multi_uvc_camera import MultiUvcCamera, VideoRecorder
 from diffusion_policy.common.timestamp_accumulator import (
     TimestampActionAccumulator,
@@ -240,8 +241,22 @@ class BimanualUmiEnv:
                     verbose=False,
                     receive_latency=rc['robot_obs_latency']
                 )
+            elif rc['robot_type'].startswith('xarm'):
+                this_robot = XArmInterpolationController(
+                    shm_manager=shm_manager,
+                    robot_ip=rc['robot_ip'],
+                    frequency=rc.get('frequency', 100),
+                    max_pos_speed=max_pos_speed*cube_diag,
+                    max_rot_speed=max_rot_speed*cube_diag,
+                    launch_timeout=3,
+                    joints_init=j_init,
+                    joints_init_speed=1.0,
+                    verbose=False,
+                    get_max_k=None,
+                    receive_latency=rc.get('robot_obs_latency', 0.0)
+                )
             else:
-                raise NotImplementedError()
+                raise NotImplementedError(f"Unknown robot_type: {rc['robot_type']}")
             robots.append(this_robot)
 
         for gc in grippers_config:
