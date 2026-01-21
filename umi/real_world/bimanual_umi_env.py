@@ -5,8 +5,8 @@ import time
 import shutil
 import math
 from multiprocessing.managers import SharedMemoryManager
-from umi.real_world.rtde_interpolation_controller import RTDEInterpolationController
-from umi.real_world.wsg_controller import WSGController
+# from umi.real_world.rtde_interpolation_controller import RTDEInterpolationController  # Comment out if not using UR robots
+# from umi.real_world.wsg_controller import WSGController  # Comment out if not using WSG grippers
 from umi.real_world.franka_interpolation_controller import FrankaInterpolationController
 from umi.real_world.xarm_interpolation_controller import XArmInterpolationController
 from umi.real_world.multi_uvc_camera import MultiUvcCamera, VideoRecorder
@@ -52,7 +52,7 @@ class BimanualUmiEnv:
             robot_obs_horizon=2,
             gripper_obs_horizon=2,
             # action
-            max_pos_speed=0.25,
+            max_pos_speed=0.05,
             max_rot_speed=0.6,
             init_joints=False,
             # vis params
@@ -206,11 +206,10 @@ class BimanualUmiEnv:
         if not init_joints:
             j_init = None
 
-        assert len(robots_config) == len(grippers_config)
-        robots: List[RTDEInterpolationController] = list()
-        grippers: List[WSGController] = list()
+        robots: List[XArmInterpolationController] = list()
         for rc in robots_config:
             if rc['robot_type'].startswith('ur5'):
+                from umi.real_world.rtde_interpolation_controller import RTDEInterpolationController
                 assert rc['robot_type'] in ['ur5', 'ur5e']
                 this_robot = RTDEInterpolationController(
                     shm_manager=shm_manager,
@@ -259,22 +258,11 @@ class BimanualUmiEnv:
                 raise NotImplementedError(f"Unknown robot_type: {rc['robot_type']}")
             robots.append(this_robot)
 
-        for gc in grippers_config:
-            this_gripper = WSGController(
-                shm_manager=shm_manager,
-                hostname=gc['gripper_ip'],
-                port=gc['gripper_port'],
-                receive_latency=gc['gripper_obs_latency'],
-                use_meters=True
-            )
-
-            grippers.append(this_gripper)
-
         self.camera = camera
         
         self.robots = robots
         self.robots_config = robots_config
-        self.grippers = grippers
+        self.grippers = []
         self.grippers_config = grippers_config
 
         self.multi_cam_vis = multi_cam_vis
@@ -391,9 +379,7 @@ class BimanualUmiEnv:
         # 125/500 hz, robot_receive_timestamp
         for robot in self.robots:
             last_robots_data.append(robot.get_all_state())
-        # 30 hz, gripper_receive_timestamp
-        for gripper in self.grippers:
-            last_grippers_data.append(gripper.get_all_state())
+            last_grippers_data.append(robot.get_all_state())
 
         # select align_camera_idx
         num_obs_cameras = len(self.robots)
@@ -514,19 +500,25 @@ class BimanualUmiEnv:
 
         # schedule waypoints
         for i in range(len(new_actions)):
-            for robot_idx, (robot, gripper, rc, gc) in enumerate(zip(self.robots, self.grippers, self.robots_config, self.grippers_config)):
+            for robot_idx, (robot, rc) in enumerate(zip(self.robots, self.robots_config)):
                 r_latency = rc['robot_action_latency'] if compensate_latency else 0.0
-                g_latency = gc['gripper_action_latency'] if compensate_latency else 0.0
+                g_latency = .1
                 r_actions = new_actions[i, 7 * robot_idx + 0: 7 * robot_idx + 6]
                 g_actions = new_actions[i, 7 * robot_idx + 6]
-                robot.schedule_waypoint(
-                    pose=r_actions,
-                    target_time=new_timestamps[i] - r_latency
-                )
-                gripper.schedule_waypoint(
-                    pos=g_actions,
-                    target_time=new_timestamps[i] - g_latency
-                )
+                
+                # For xArm robots with integrated gripper control
+                if rc['robot_type'].startswith('xarm'):
+                    # Schedule arm waypoint
+                    robot.schedule_waypoint(
+                        pose=r_actions,
+                        target_time=new_timestamps[i] - r_latency
+                    )
+                else:
+                    # For other robot types with separate gripper controllers
+                    robot.schedule_waypoint(
+                        pose=r_actions,
+                        target_time=new_timestamps[i] - r_latency
+                    )
 
         # record actions
         if self.action_accumulator is not None:
@@ -539,7 +531,7 @@ class BimanualUmiEnv:
         return [robot.get_state() for robot in self.robots]
     
     def get_gripper_state(self):
-        return [gripper.get_state() for gripper in self.grippers]
+        return [robot.get_state() for robot in self.robots]
 
     # recording API
     def start_episode(self, start_time=None):
