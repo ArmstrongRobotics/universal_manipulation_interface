@@ -4,8 +4,8 @@
   "robots": [
     {
       "robot_type": "xarm",
-      "robot_ip": "192.168.0.8",
-      "robot_obs_latency": 0.0001, "robot_action_latency": 0.1, "tcp_offset": 0.235,
+      "robot_ip": "192.168.86.238",
+      "robot_obs_latency": 0.0001, "robot_action_latency": 0.1, "tcp_offset": 0.247,
       # table height for finger-table collision avoidance
       # -inf to disable
       "height_threshold": -0.024,
