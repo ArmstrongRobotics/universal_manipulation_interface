@@ -84,6 +84,8 @@ class XArmInterpolationController(mp.Process):
             put_desired_frequency=frequency
         )
         self.ready_event = mp.Event()
+        self.step_event = mp.Event()  # Event to gate each servo step
+        self.step_event_trigger = mp.Event()
         self.input_queue = input_queue
         self.ring_buffer = ring_buffer
     def start(self, wait=True):
@@ -105,14 +107,15 @@ class XArmInterpolationController(mp.Process):
     @property
     def is_ready(self):
         return self.ready_event.is_set()
-    def schedule_waypoint(self, pose, target_time):
-        pose = np.array(pose)
+    def schedule_waypoint(self, pose_and_gripper, target_time):
+        pose = np.array(pose_and_gripper[:6])
         assert pose.shape == (6,)
+        gripper_pos = pose_and_gripper[6]
         message = {
             'cmd': Command.SCHEDULE_WAYPOINT.value,
             'target_pose': pose,
             'target_time': target_time,
-            'gripper_pos': 0.0  # Default gripper position
+            'gripper_pos': gripper_pos
         }
         self.input_queue.put(message)
 
@@ -153,6 +156,7 @@ class XArmInterpolationController(mp.Process):
         if ret[0] != 0:
             raise RuntimeError(f"Failed to get initial position, error code: {ret[0]}")
         curr_pose = np.array(ret[1][0:6])
+        curr_pose[:3] = curr_pose[:3] / 1000.0  # convert mm to meters
         print(curr_pose)
         curr_t = time.monotonic()
         last_waypoint_time = curr_t
@@ -170,16 +174,39 @@ class XArmInterpolationController(mp.Process):
         iter_idx = 0
         keep_running = True
         while keep_running:
+
             t_now = time.monotonic()
+            ret = arm.get_position(is_radian=True)
+            if ret[0] != 0:
+                raise RuntimeError(f"Failed to get initial position, error code: {ret[0]}")
+            curr_pose = np.array(ret[1][0:6])
+            curr_pose[:3] = curr_pose[:3] / 1000.0  # convert mm to meters
             pose_command = pose_interp(t_now)
+            # Print difference between pose_command and curr_pose
+            pos_diff = pose_command[:3] - curr_pose[:3]
+            rot_diff_rad = pose_command[3:6] - curr_pose[3:6]
+            rot_diff_deg = np.degrees(rot_diff_rad)
+            # Only wait for event if any rot diff deg > 1 or any pos diff > 0.01
+            if np.any(np.abs(rot_diff_deg) > 5.0) or np.any(np.abs(pos_diff) > 0.05):
+                self.step_event_trigger.set()
+                print("Waiting on input from user")
+                print("Pose command:", pose_command)
+                print("Current pose:", curr_pose)
+                print("Pose diff: pos (m):", pos_diff, "rot (deg):", rot_diff_deg)
+                self.step_event.wait()
+                self.step_event.clear()
+                self.step_event_trigger.clear()
             # Send interpolated pose to xArm
-            arm.set_servo_cartesian(pose_command, speed=self.max_pos_speed, mvacc=None, mvtime=0, is_radian=True)
+            pose_command_mm = pose_command.copy()
+            pose_command_mm[:3] = pose_command_mm[:3] * 1000.  # convert to mm
+            arm.set_servo_cartesian(pose_command_mm, speed=self.max_pos_speed, mvacc=None, mvtime=0, is_radian=True)
             
             # Handle gripper control
             dt = 1 / self.frequency
             gripper_target_pos = gripper_interp(t_now)[0]
             gripper_target_vel = (gripper_interp(t_now)[0] - gripper_interp(t_now - dt)[0]) / dt
-            
+
+            print("Gripper target pos:", gripper_target_pos)
             # Send gripper command if position changed significantly
             if abs(gripper_target_pos - last_gripper_pos) > 1.0:  # Position tolerance
                 arm.robotiq_set_position(
@@ -204,6 +231,9 @@ class XArmInterpolationController(mp.Process):
             
             # Get TCP velocity (if available, otherwise estimate or use zeros)
             actual_tcp_pose = np.array(ret[1][0:6])
+            # Convert position from mm to meters
+            actual_tcp_pose[:3] = actual_tcp_pose[:3] / 1000.0
+            
             # Note: xArm API doesn't directly provide TCP velocity, so we'll use zeros
             # In a real implementation, you might estimate this from pose differences
             actual_tcp_speed = np.zeros(6)

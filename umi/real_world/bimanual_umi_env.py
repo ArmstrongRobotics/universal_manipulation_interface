@@ -510,7 +510,7 @@ class BimanualUmiEnv:
                 if rc['robot_type'].startswith('xarm'):
                     # Schedule arm waypoint
                     robot.schedule_waypoint(
-                        pose=r_actions,
+                        pose=new_actions[i],
                         target_time=new_timestamps[i] - r_latency
                     )
                 else:
