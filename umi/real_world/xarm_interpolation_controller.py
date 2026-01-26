@@ -107,13 +107,13 @@ class XArmInterpolationController(mp.Process):
     @property
     def is_ready(self):
         return self.ready_event.is_set()
-    def schedule_waypoint(self, pose_and_gripper, target_time):
-        pose = np.array(pose_and_gripper[:6])
-        assert pose.shape == (6,)
-        gripper_pos = pose_and_gripper[6]
+    def schedule_waypoint(self, pose, target_time):
+        arm_pose = np.array(pose[:6])
+        assert arm_pose.shape == (6,)
+        gripper_pos = pose[6]
         message = {
             'cmd': Command.SCHEDULE_WAYPOINT.value,
-            'target_pose': pose,
+            'target_pose': arm_pose,
             'target_time': target_time,
             'gripper_pos': gripper_pos
         }
@@ -147,7 +147,7 @@ class XArmInterpolationController(mp.Process):
         # Home gripper to open position
         print("[XArmInterpolationController] Homing gripper to open...")
         arm.robotiq_open(speed=0xFF, force=0x32, wait=True)
-        curr_gripper_pos = 0.0  # Open position
+        curr_gripper_pos = .051  # Open position in meters
         last_gripper_pos = curr_gripper_pos
         
         dt = 1. / self.frequency
@@ -206,11 +206,13 @@ class XArmInterpolationController(mp.Process):
             gripper_target_pos = gripper_interp(t_now)[0]
             gripper_target_vel = (gripper_interp(t_now)[0] - gripper_interp(t_now - dt)[0]) / dt
 
-            print("Gripper target pos:", gripper_target_pos)
+            gripper_target_pos = np.clip(gripper_target_pos, 0.0, 0.051)  # Gripper range in meters
+            # Map to Robotiq position value (0-255)
+            gripper_target_pos_robotiq = int(np.clip(255 * (1 - (gripper_target_pos / 0.051)), 0, 255))
             # Send gripper command if position changed significantly
-            if abs(gripper_target_pos - last_gripper_pos) > 1.0:  # Position tolerance
+            if abs(gripper_target_pos - last_gripper_pos) > .001:  # Position tolerance
                 arm.robotiq_set_position(
-                    pos=int(gripper_target_pos), 
+                    pos=gripper_target_pos_robotiq, 
                     speed=min(255, int(abs(gripper_target_vel) * 10)), 
                     force=255, 
                     wait=False
@@ -247,7 +249,9 @@ class XArmInterpolationController(mp.Process):
             fault_reg = response[1]   # Register 0x07D1
             pos_current_reg = response[2]  # Register 0x07D2
             
-            gripper_position = pos_current_reg & 0xFF  # Position in lower byte
+            gripper_position_raw = pos_current_reg & 0xFF  # Position in lower byte
+            # Map 0 to 0.051m (open), 251 to 0m (closed)
+            gripper_position = np.clip(0.051 * (1 - (gripper_position_raw / 255.0)), 0.0, 0.051)
             gripper_current = (pos_current_reg >> 8) & 0xFF  # Current in upper byte
             
             # Estimate velocity from position change
@@ -265,8 +269,8 @@ class XArmInterpolationController(mp.Process):
                 'TargetQd': np.zeros(7),  # Could be computed from trajectory
                 'robot_timestamp': time.time() - self.receive_latency,
                 'gripper_state': status_reg,
-                'gripper_position': gripper_position / 1000.0,  # Convert to meters if needed
-                'gripper_velocity': gripper_velocity / 1000.0,
+                'gripper_position': gripper_position,
+                'gripper_velocity': gripper_velocity,
                 'gripper_force': gripper_current,  # Use current as force approximation
                 'gripper_measure_timestamp': time.time(),
                 'gripper_receive_timestamp': time.time(),
