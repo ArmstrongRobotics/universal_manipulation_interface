@@ -38,7 +38,7 @@ def main(input_dir, map_path, docker_image, no_docker_pull, no_mask):
     else:
         map_path = pathlib.Path(os.path.expanduser(map_path)).absolute()
     map_path.parent.mkdir(parents=True, exist_ok=True)
-
+    no_docker_pull = True
     # pull docker
     if not no_docker_pull:
         print(f"Pulling docker image {docker_image}")
@@ -77,7 +77,7 @@ def main(input_dir, map_path, docker_image, no_docker_pull, no_mask):
         docker_image,
         '/ORB_SLAM3/Examples/Monocular-Inertial/gopro_slam',
         '--vocabulary', '/ORB_SLAM3/Vocabulary/ORBvoc.txt',
-        '--setting', '/ORB_SLAM3/Examples/Monocular-Inertial/gopro9_maxlens_fisheye_setting_v1_720.yaml ',
+        '--setting', '/ORB_SLAM3/Examples/Monocular-Inertial/gopro9_maxlens_fisheye_setting_v1_720.yaml',
         '--input_video', str(video_path),
         '--input_imu_json', str(json_path),
         '--output_trajectory_csv', str(csv_path),

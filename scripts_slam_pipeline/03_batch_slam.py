@@ -59,6 +59,7 @@ def main(input_dir, map_path, docker_image, num_workers, max_lost_frames, timeou
     if num_workers is None:
         num_workers = multiprocessing.cpu_count() // 2
 
+    no_docker_pull = True
     # pull docker
     if not no_docker_pull:
         print(f"Pulling docker image {docker_image}")
