@@ -8,6 +8,9 @@ from umi.shared_memory.shared_memory_queue import SharedMemoryQueue, Empty
 from umi.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
 from umi.common.pose_trajectory_interpolator import PoseTrajectoryInterpolator
 from diffusion_policy.common.precise_sleep import precise_wait
+from umi.real_world.real_inference_util import (pose_to_mat,
+                                                mat_to_pose 
+                                                )
 
 class Command(enum.Enum):
     STOP = 0
@@ -141,8 +144,7 @@ class XArmInterpolationController(mp.Process):
         if gripper_was_already_activated:
             print("Gripper activated, will open...")
         else:
-            print("Gripper NOT activated, activating temporarily to open and then will deactivate again")
-            raise RuntimeError("Robotiq gripper must be activated before use.")
+            raise RuntimeError('Gripper not activated.')
         
         # Home gripper to open position
         print("[XArmInterpolationController] Homing gripper to open...")
@@ -156,6 +158,7 @@ class XArmInterpolationController(mp.Process):
         if ret[0] != 0:
             raise RuntimeError(f"Failed to get initial position, error code: {ret[0]}")
         curr_pose = np.array(ret[1][0:6])
+
         curr_pose[:3] = curr_pose[:3] / 1000.0  # convert mm to meters
         print(curr_pose)
         curr_t = time.monotonic()
@@ -182,25 +185,37 @@ class XArmInterpolationController(mp.Process):
             curr_pose = np.array(ret[1][0:6])
             curr_pose[:3] = curr_pose[:3] / 1000.0  # convert mm to meters
             pose_command = pose_interp(t_now)
-            # Print difference between pose_command and curr_pose
+
+            # Calculate difference between pose_command and curr_pose
             pos_diff = pose_command[:3] - curr_pose[:3]
             rot_diff_rad = pose_command[3:6] - curr_pose[3:6]
             rot_diff_deg = np.degrees(rot_diff_rad)
+
+            # Print difference between pose_command and curr_pose
+            curr_pose_mat = pose_to_mat(curr_pose)
+            pose_command_mat = pose_to_mat(pose_command)
+            new_pose_in_cur_pose = np.linalg.inv(curr_pose_mat) @ pose_command_mat
+            new_pose_in_cur_pose_pose = mat_to_pose(new_pose_in_cur_pose)
+            # Convert last 3 elements (rotation vector) to degrees for clarity
+            rotvec_rad = new_pose_in_cur_pose_pose[3:6]
+            rotvec_deg = np.degrees(rotvec_rad)
+
             # Only wait for event if any rot diff deg > 1 or any pos diff > 0.01
-            if np.any(np.abs(rot_diff_deg) > 5.0) or np.any(np.abs(pos_diff) > 0.05):
+            if np.any(np.abs(rotvec_deg) > 5.0) or np.any(np.abs(pos_diff) > 0.05):
                 self.step_event_trigger.set()
                 print("Waiting on input from user")
                 print("Pose command:", pose_command)
                 print("Current pose:", curr_pose)
                 print("Pose diff: pos (m):", pos_diff, "rot (deg):", rot_diff_deg)
+                print("Pose diff in deg via new_pose_in_cur_pose:", rotvec_deg)
                 self.step_event.wait()
                 self.step_event.clear()
                 self.step_event_trigger.clear()
+
             # Send interpolated pose to xArm
             pose_command_mm = pose_command.copy()
             pose_command_mm[:3] = pose_command_mm[:3] * 1000.  # convert to mm
             arm.set_servo_cartesian(pose_command_mm, speed=self.max_pos_speed, mvacc=None, mvtime=0, is_radian=True)
-            
             # Handle gripper control
             dt = 1 / self.frequency
             gripper_target_pos = gripper_interp(t_now)[0]
