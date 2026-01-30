@@ -498,7 +498,6 @@ class BimanualUmiEnv:
                 # For xArm robots with integrated gripper control
                 if rc['robot_type'].startswith('xarm'):
                     # Schedule arm waypoint
-                    print("Gripper nn output: ", new_actions[i, 6])
                     robot.schedule_waypoint(
                         pose=new_actions[i],
                         target_time=new_timestamps[i] - r_latency
