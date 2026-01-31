@@ -175,6 +175,8 @@ training:
   # misc
   tqdm_interval_sec: 1.0
 
+enable_wandb: True
+
 logging:
   project: umi
   resume: False
