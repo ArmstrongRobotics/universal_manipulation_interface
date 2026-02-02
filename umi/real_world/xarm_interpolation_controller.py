@@ -275,10 +275,10 @@ class XArmInterpolationController(mp.Process):
                 'TargetQ': np.zeros(7),  # Could be computed via IK if needed
                 'TargetQd': np.zeros(7),  # Could be computed from trajectory
                 'robot_timestamp': time.time() - self.receive_latency,
-                'gripper_state': 0,
-                'gripper_position': .051,
+                'gripper_state': status_reg,
+                'gripper_position': gripper_position,
                 'gripper_velocity': 0,
-                'gripper_force': 0,  # Use current as force approximation
+                'gripper_force': gripper_current,  # Use current as force approximation
                 'gripper_measure_timestamp': time.time(),
                 'gripper_receive_timestamp': time.time(),
                 'gripper_timestamp': time.time() - self.receive_latency
