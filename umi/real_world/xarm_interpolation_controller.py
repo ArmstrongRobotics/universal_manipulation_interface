@@ -25,7 +25,7 @@ class XArmInterpolationController(mp.Process):
     def __init__(self,
             shm_manager,
             robot_ip,
-            frequency=100,
+            frequency=30.0,
             max_pos_speed=0.05,
             max_rot_speed=0.16,
             gripper_max_speed=200.0,
@@ -182,8 +182,6 @@ class XArmInterpolationController(mp.Process):
             ret = arm.get_position(is_radian=True)
             if ret[0] != 0:
                 raise RuntimeError(f"Failed to get initial position, error code: {ret[0]}")
-            curr_pose = np.array(ret[1][0:6])
-            curr_pose[:3] = curr_pose[:3] / 1000.0  # convert mm to meters
             pose_command = pose_interp(t_now)
 
             # Calculate difference between pose_command and curr_pose
@@ -199,7 +197,6 @@ class XArmInterpolationController(mp.Process):
             # Convert last 3 elements (rotation vector) to degrees for clarity
             rotvec_rad = new_pose_in_cur_pose_pose[3:6]
             rotvec_deg = np.degrees(rotvec_rad)
-
             # Only wait for event if any rot diff deg > 1 or any pos diff > 0.01
             if np.any(np.abs(rotvec_deg) > 5.0) or np.any(np.abs(pos_diff) > 0.05):
                 self.step_event_trigger.set()
@@ -222,9 +219,9 @@ class XArmInterpolationController(mp.Process):
             gripper_target_vel = (gripper_interp(t_now)[0] - gripper_interp(t_now - dt)[0]) / dt
 
             gripper_target_pos = np.clip(gripper_target_pos, 0.0, 0.051)  # Gripper range in meters
-            # Map to Robotiq position value (0-255)
+            # # Map to Robotiq position value (0-255)
             gripper_target_pos_robotiq = int(np.clip(255 * (1 - (gripper_target_pos / 0.051)), 0, 255))
-            # Send gripper command if position changed significantly
+            # # Send gripper command if position changed significantly
             if abs(gripper_target_pos - last_gripper_pos) > .001:  # Position tolerance
                 arm.robotiq_set_position(
                     pos=gripper_target_pos_robotiq, 
@@ -237,22 +234,15 @@ class XArmInterpolationController(mp.Process):
             ret = arm.get_position(is_radian=True)
             if ret[0] != 0:
                 raise RuntimeError(f"Failed to get position, error code: {ret[0]}")
-            
+            curr_pose = np.array(ret[1][0:6])
+            curr_pose[:3] = curr_pose[:3] / 1000.0  # convert mm to meters
             # Get joint positions and velocities
             joint_ret = arm.get_joint_states()
             if joint_ret[0] != 0:
                 raise RuntimeError(f"Failed to get joint states, error code: {joint_ret[0]}")
-            
-            actual_joints = np.array(joint_ret[1][0])  # joint positions
-            actual_joint_vels = np.array(joint_ret[1][1])  # joint velocities
-            
-            # Get TCP velocity (if available, otherwise estimate or use zeros)
-            actual_tcp_pose = np.array(ret[1][0:6])
-            # Convert position from mm to meters
-            actual_tcp_pose[:3] = actual_tcp_pose[:3] / 1000.0
+        
             
             # Note: xArm API doesn't directly provide TCP velocity, so we'll use zeros
-            # In a real implementation, you might estimate this from pose differences
             actual_tcp_speed = np.zeros(6)
             
             # Get gripper state
@@ -265,28 +255,24 @@ class XArmInterpolationController(mp.Process):
             pos_current_reg = response[2]  # Register 0x07D2
             
             gripper_position_raw = pos_current_reg & 0xFF  # Position in lower byte
-            # Map 0 to 0.051m (open), 251 to 0m (closed)
+            # # Map 0 to 0.051m (open), 251 to 0m (closed)
             gripper_position = np.clip(0.051 * (1 - (gripper_position_raw / 255.0)), 0.0, 0.051)
             gripper_current = (pos_current_reg >> 8) & 0xFF  # Current in upper byte
-            
-            # Estimate velocity from position change
-            gripper_velocity = (gripper_position - getattr(self, '_last_gripper_position', gripper_position)) * self.frequency
-            self._last_gripper_position = gripper_position
 
             state = {
-                'ActualTCPPose': actual_tcp_pose,
+                'ActualTCPPose': curr_pose,
                 'ActualTCPSpeed': actual_tcp_speed,
-                'ActualQ': actual_joints,
-                'ActualQd': actual_joint_vels,
+                'ActualQ': None,
+                'ActualQd': None,
                 'TargetTCPPose': pose_command,
                 'TargetTCPSpeed': np.zeros(6),  # Could be computed from trajectory
                 'TargetQ': np.zeros(7),  # Could be computed via IK if needed
                 'TargetQd': np.zeros(7),  # Could be computed from trajectory
                 'robot_timestamp': time.time() - self.receive_latency,
-                'gripper_state': status_reg,
-                'gripper_position': gripper_position,
+                'gripper_state': 0,
+                'gripper_position': .051,
                 'gripper_velocity': gripper_velocity,
-                'gripper_force': gripper_current,  # Use current as force approximation
+                'gripper_force': 0,  # Use current as force approximation
                 'gripper_measure_timestamp': time.time(),
                 'gripper_receive_timestamp': time.time(),
                 'gripper_timestamp': time.time() - self.receive_latency
