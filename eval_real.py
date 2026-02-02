@@ -24,6 +24,7 @@ Press "S" to stop evaluation and gain control back.
 import os
 import pathlib
 import time
+import multiprocessing as mp
 from multiprocessing.managers import SharedMemoryManager
 
 import av
@@ -106,7 +107,7 @@ def solve_sphere_collision(ee_poses, robots_config):
                 ee_poses[that_robot_idx][:6] = mat_to_pose(np.linalg.inv(this_that_mat) @ that_sphere_mat_global @ np.linalg.inv(that_sphere_mat_local))
 
 @click.command()
-@click.option('--input', '-i', required=True, help='Path to checkpoint')
+@click.option('--input_path', '-i', required=True, help='Path to checkpoint')
 @click.option('--output', '-o', required=True, help='Directory to save recording')
 @click.option('--robot_config', '-rc', required=True, help='Path to robot_config yaml file')
 @click.option('--match_dataset', '-m', default=None, help='Dataset used to overlay and adjust initial condition')
@@ -117,13 +118,13 @@ def solve_sphere_collision(ee_poses, robots_config):
 @click.option('--init_joints', '-j', is_flag=True, default=False, help="Whether to initialize robot joint configuration in the beginning.")
 @click.option('--steps_per_inference', '-si', default=6, type=int, help="Action horizon for inference.")
 @click.option('--max_duration', '-md', default=2000000, help='Max duration for each epoch in seconds.')
-@click.option('--frequency', '-f', default=10, type=float, help="Control frequency in Hz.")
+@click.option('--frequency', '-f', default=3, type=float, help="Control frequency in Hz.")
 @click.option('--command_latency', '-cl', default=0.01, type=float, help="Latency between receiving SapceMouse command to executing on Robot in Sec.")
 @click.option('-nm', '--no_mirror', is_flag=True, default=False)
 @click.option('-sf', '--sim_fov', type=float, default=None)
 @click.option('-ci', '--camera_intrinsics', type=str, default=None)
 @click.option('--mirror_swap', is_flag=True, default=False)
-def main(input, output, robot_config, 
+def main(input_path, output, robot_config, 
     match_dataset, match_episode, match_camera,
     camera_reorder,
     vis_camera_idx, init_joints, 
@@ -144,7 +145,7 @@ def main(input, output, robot_config,
     grippers_config = robot_config_data['grippers']
 
     # load checkpoint
-    ckpt_path = input
+    ckpt_path = input_path
     if not ckpt_path.endswith('.ckpt'):
         ckpt_path = os.path.join(ckpt_path, 'checkpoints', 'latest.ckpt')
     payload = torch.load(open(ckpt_path, 'rb'), map_location='cpu', pickle_module=dill)
@@ -268,6 +269,13 @@ def main(input, output, robot_config,
                 del result
 
             print('Ready!')
+            # Create references to step_event for each robot controller
+            robot_step_events = []
+            for robot in env.robots:
+                if hasattr(robot, 'step_event'):
+                    robot_step_events.append(robot.step_event)
+                else:
+                    robot_step_events.append(None)
             while True:
                 # ========= human control loop ==========
                 print("Human in control!")
@@ -308,6 +316,7 @@ def main(input, output, robot_config,
                         vis_img = (vis_img + match_img) / 2
                     obs_left_img = obs['camera0_rgb'][-1]
                     obs_right_img = obs['camera0_rgb'][-1]
+
                     vis_img = np.concatenate([obs_left_img, obs_right_img, vis_img], axis=1)
                     
                     text = f'Episode: {episode_id}'
@@ -378,21 +387,18 @@ def main(input, output, robot_config,
                         elif key_stroke == KeyCode(char='2'):
                             control_robot_idx_list = [1]
 
-                    if start_policy:
-                        break
+                    break
 
                     precise_wait(t_sample)
                     # get teleop command
                     sm_state = sm.get_motion_state_transformed()
-                    # print(sm_state)
                     dpos = sm_state[:3] * (0.5 / frequency)
                     drot_xyz = sm_state[3:] * (1.5 / frequency)
 
                     drot = st.Rotation.from_euler('xyz', drot_xyz)
                     for robot_idx in control_robot_idx_list:
                         target_pose[robot_idx, :3] += dpos
-                        target_pose[robot_idx, 3:] = (drot * st.Rotation.from_rotvec(
-                            target_pose[robot_idx, 3:])).as_rotvec()
+                        target_pose[robot_idx, 3:] = (drot * st.Rotation.from_rotvec(target_pose[robot_idx, 3:])).as_rotvec()
 
                     dpos = 0
                     if sm.is_button_pressed(0):
@@ -421,8 +427,6 @@ def main(input, output, robot_config,
                     for robot_idx in range(target_pose.shape[0]):
                         action[7 * robot_idx + 0: 7 * robot_idx + 6] = target_pose[robot_idx]
                         action[7 * robot_idx + 6] = gripper_target_pos[robot_idx]
-
-
                     # execute teleop command
                     env.exec_actions(
                         actions=[action], 
@@ -466,6 +470,11 @@ def main(input, output, robot_config,
                         obs_timestamps = obs['timestamp']
                         print(f'Obs latency {time.time() - obs_timestamps[-1]}')
 
+                        if(env.robots[0].step_event_trigger.is_set()):
+                            input("Press Enter to proceed with robot step...")
+                            for event in robot_step_events:
+                                if event is not None:
+                                    event.set()
                         # run inference
                         with torch.no_grad():
                             s = time.time()
@@ -474,6 +483,7 @@ def main(input, output, robot_config,
                                 obs_pose_repr=obs_pose_rep,
                                 tx_robot1_robot0=tx_robot1_robot0,
                                 episode_start_pose=episode_start_pose)
+                            
                             obs_dict = dict_apply(obs_dict_np, 
                                 lambda x: torch.from_numpy(x).unsqueeze(0).to(device))
                             result = policy.predict_action(obs_dict)
@@ -502,7 +512,6 @@ def main(input, output, robot_config,
                         # the same step actions are always the target for
                         action_timestamps = (np.arange(len(action), dtype=np.float64)
                             ) * dt + obs_timestamps[-1]
-                        print(dt)
                         action_exec_latency = 0.01
                         curr_time = time.time()
                         is_new = action_timestamps > (curr_time + action_exec_latency)
@@ -544,7 +553,6 @@ def main(input, output, robot_config,
                             color=(255,255,255)
                         )
                         cv2.imshow('default', vis_img[...,::-1])
-
                         _ = cv2.pollKey()
                         press_events = key_counter.get_press_events()
                         stop_episode = False

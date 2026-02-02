@@ -8,6 +8,9 @@ from umi.shared_memory.shared_memory_queue import SharedMemoryQueue, Empty
 from umi.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
 from umi.common.pose_trajectory_interpolator import PoseTrajectoryInterpolator
 from diffusion_policy.common.precise_sleep import precise_wait
+from umi.real_world.real_inference_util import (pose_to_mat,
+                                                mat_to_pose 
+                                                )
 
 class Command(enum.Enum):
     STOP = 0
@@ -22,7 +25,7 @@ class XArmInterpolationController(mp.Process):
     def __init__(self,
             shm_manager,
             robot_ip,
-            frequency=100,
+            frequency=30.0,
             max_pos_speed=0.05,
             max_rot_speed=0.16,
             gripper_max_speed=200.0,
@@ -84,6 +87,8 @@ class XArmInterpolationController(mp.Process):
             put_desired_frequency=frequency
         )
         self.ready_event = mp.Event()
+        self.step_event = mp.Event()  # Event to gate each servo step
+        self.step_event_trigger = mp.Event()
         self.input_queue = input_queue
         self.ring_buffer = ring_buffer
     def start(self, wait=True):
@@ -106,13 +111,14 @@ class XArmInterpolationController(mp.Process):
     def is_ready(self):
         return self.ready_event.is_set()
     def schedule_waypoint(self, pose, target_time):
-        pose = np.array(pose)
-        assert pose.shape == (6,)
+        arm_pose = np.array(pose[:6])
+        assert arm_pose.shape == (6,)
+        gripper_pos = pose[6]
         message = {
             'cmd': Command.SCHEDULE_WAYPOINT.value,
-            'target_pose': pose,
+            'target_pose': arm_pose,
             'target_time': target_time,
-            'gripper_pos': 0.0  # Default gripper position
+            'gripper_pos': gripper_pos
         }
         self.input_queue.put(message)
 
@@ -138,13 +144,12 @@ class XArmInterpolationController(mp.Process):
         if gripper_was_already_activated:
             print("Gripper activated, will open...")
         else:
-            print("Gripper NOT activated, activating temporarily to open and then will deactivate again")
-            raise RuntimeError("Robotiq gripper must be activated before use.")
+            raise RuntimeError('Gripper not activated.')
         
         # Home gripper to open position
         print("[XArmInterpolationController] Homing gripper to open...")
         arm.robotiq_open(speed=0xFF, force=0x32, wait=True)
-        curr_gripper_pos = 0.0  # Open position
+        curr_gripper_pos = .051  # Open position in meters
         last_gripper_pos = curr_gripper_pos
         
         dt = 1. / self.frequency
@@ -153,6 +158,8 @@ class XArmInterpolationController(mp.Process):
         if ret[0] != 0:
             raise RuntimeError(f"Failed to get initial position, error code: {ret[0]}")
         curr_pose = np.array(ret[1][0:6])
+
+        curr_pose[:3] = curr_pose[:3] / 1000.0  # convert mm to meters
         print(curr_pose)
         curr_t = time.monotonic()
         last_waypoint_time = curr_t
@@ -170,20 +177,54 @@ class XArmInterpolationController(mp.Process):
         iter_idx = 0
         keep_running = True
         while keep_running:
+
             t_now = time.monotonic()
+            ret = arm.get_position(is_radian=True)
+            if ret[0] != 0:
+                raise RuntimeError(f"Failed to get initial position, error code: {ret[0]}")
             pose_command = pose_interp(t_now)
+
+            # Calculate difference between pose_command and curr_pose
+            pos_diff = pose_command[:3] - curr_pose[:3]
+            rot_diff_rad = pose_command[3:6] - curr_pose[3:6]
+            rot_diff_deg = np.degrees(rot_diff_rad)
+
+            # Print difference between pose_command and curr_pose
+            curr_pose_mat = pose_to_mat(curr_pose)
+            pose_command_mat = pose_to_mat(pose_command)
+            new_pose_in_cur_pose = np.linalg.inv(curr_pose_mat) @ pose_command_mat
+            new_pose_in_cur_pose_pose = mat_to_pose(new_pose_in_cur_pose)
+            # Convert last 3 elements (rotation vector) to degrees for clarity
+            rotvec_rad = new_pose_in_cur_pose_pose[3:6]
+            rotvec_deg = np.degrees(rotvec_rad)
+            # Only wait for event if any rot diff deg > 1 or any pos diff > 0.01
+            if np.any(np.abs(rotvec_deg) > 5.0) or np.any(np.abs(pos_diff) > 0.05):
+                self.step_event_trigger.set()
+                print("Waiting on input from user")
+                print("Pose command:", pose_command)
+                print("Current pose:", curr_pose)
+                print("Pose diff: pos (m):", pos_diff, "rot (deg):", rot_diff_deg)
+                print("Pose diff in deg via new_pose_in_cur_pose:", rotvec_deg)
+                self.step_event.wait()
+                self.step_event.clear()
+                self.step_event_trigger.clear()
+
             # Send interpolated pose to xArm
-            arm.set_servo_cartesian(pose_command, speed=self.max_pos_speed, mvacc=None, mvtime=0, is_radian=True)
-            
+            pose_command_mm = pose_command.copy()
+            pose_command_mm[:3] = pose_command_mm[:3] * 1000.  # convert to mm
+            arm.set_servo_cartesian(pose_command_mm, speed=self.max_pos_speed, mvacc=None, mvtime=0, is_radian=True)
             # Handle gripper control
             dt = 1 / self.frequency
             gripper_target_pos = gripper_interp(t_now)[0]
             gripper_target_vel = (gripper_interp(t_now)[0] - gripper_interp(t_now - dt)[0]) / dt
-            
-            # Send gripper command if position changed significantly
-            if abs(gripper_target_pos - last_gripper_pos) > 1.0:  # Position tolerance
+
+            gripper_target_pos = np.clip(gripper_target_pos, 0.0, 0.051)  # Gripper range in meters
+            # # Map to Robotiq position value (0-255)
+            gripper_target_pos_robotiq = int(np.clip(255 * (1 - (gripper_target_pos / 0.051)), 0, 255))
+            # # Send gripper command if position changed significantly
+            if abs(gripper_target_pos - last_gripper_pos) > .001:  # Position tolerance
                 arm.robotiq_set_position(
-                    pos=int(gripper_target_pos), 
+                    pos=gripper_target_pos_robotiq, 
                     speed=min(255, int(abs(gripper_target_vel) * 10)), 
                     force=255, 
                     wait=False
@@ -193,19 +234,15 @@ class XArmInterpolationController(mp.Process):
             ret = arm.get_position(is_radian=True)
             if ret[0] != 0:
                 raise RuntimeError(f"Failed to get position, error code: {ret[0]}")
-            
+            curr_pose = np.array(ret[1][0:6])
+            curr_pose[:3] = curr_pose[:3] / 1000.0  # convert mm to meters
             # Get joint positions and velocities
             joint_ret = arm.get_joint_states()
             if joint_ret[0] != 0:
                 raise RuntimeError(f"Failed to get joint states, error code: {joint_ret[0]}")
+        
             
-            actual_joints = np.array(joint_ret[1][0])  # joint positions
-            actual_joint_vels = np.array(joint_ret[1][1])  # joint velocities
-            
-            # Get TCP velocity (if available, otherwise estimate or use zeros)
-            actual_tcp_pose = np.array(ret[1][0:6])
             # Note: xArm API doesn't directly provide TCP velocity, so we'll use zeros
-            # In a real implementation, you might estimate this from pose differences
             actual_tcp_speed = np.zeros(6)
             
             # Get gripper state
@@ -217,27 +254,25 @@ class XArmInterpolationController(mp.Process):
             fault_reg = response[1]   # Register 0x07D1
             pos_current_reg = response[2]  # Register 0x07D2
             
-            gripper_position = pos_current_reg & 0xFF  # Position in lower byte
+            gripper_position_raw = pos_current_reg & 0xFF  # Position in lower byte
+            # # Map 0 to 0.051m (open), 251 to 0m (closed)
+            gripper_position = np.clip(0.051 * (1 - (gripper_position_raw / 255.0)), 0.0, 0.051)
             gripper_current = (pos_current_reg >> 8) & 0xFF  # Current in upper byte
-            
-            # Estimate velocity from position change
-            gripper_velocity = (gripper_position - getattr(self, '_last_gripper_position', gripper_position)) * self.frequency
-            self._last_gripper_position = gripper_position
 
             state = {
-                'ActualTCPPose': actual_tcp_pose,
+                'ActualTCPPose': curr_pose,
                 'ActualTCPSpeed': actual_tcp_speed,
-                'ActualQ': actual_joints,
-                'ActualQd': actual_joint_vels,
+                'ActualQ': None,
+                'ActualQd': None,
                 'TargetTCPPose': pose_command,
                 'TargetTCPSpeed': np.zeros(6),  # Could be computed from trajectory
                 'TargetQ': np.zeros(7),  # Could be computed via IK if needed
                 'TargetQd': np.zeros(7),  # Could be computed from trajectory
                 'robot_timestamp': time.time() - self.receive_latency,
-                'gripper_state': status_reg,
-                'gripper_position': gripper_position / 1000.0,  # Convert to meters if needed
-                'gripper_velocity': gripper_velocity / 1000.0,
-                'gripper_force': gripper_current,  # Use current as force approximation
+                'gripper_state': 0,
+                'gripper_position': .051,
+                'gripper_velocity': gripper_velocity,
+                'gripper_force': 0,  # Use current as force approximation
                 'gripper_measure_timestamp': time.time(),
                 'gripper_receive_timestamp': time.time(),
                 'gripper_timestamp': time.time() - self.receive_latency

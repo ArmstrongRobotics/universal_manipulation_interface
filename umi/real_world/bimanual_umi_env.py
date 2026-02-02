@@ -7,7 +7,7 @@ import math
 from multiprocessing.managers import SharedMemoryManager
 # from umi.real_world.rtde_interpolation_controller import RTDEInterpolationController  # Comment out if not using UR robots
 # from umi.real_world.wsg_controller import WSGController  # Comment out if not using WSG grippers
-from umi.real_world.franka_interpolation_controller import FrankaInterpolationController
+#from umi.real_world.franka_interpolation_controller import FrankaInterpolationController
 from umi.real_world.xarm_interpolation_controller import XArmInterpolationController
 from umi.real_world.multi_uvc_camera import MultiUvcCamera, VideoRecorder
 from diffusion_policy.common.timestamp_accumulator import (
@@ -228,16 +228,6 @@ class BimanualUmiEnv:
                     soft_real_time=False,
                     verbose=False,
                     receive_keys=None,
-                    receive_latency=rc['robot_obs_latency']
-                )
-            elif rc['robot_type'].startswith('franka'):
-                this_robot = FrankaInterpolationController(
-                    shm_manager=shm_manager,
-                    robot_ip=rc['robot_ip'],
-                    frequency=200,
-                    Kx_scale=1.0,
-                    Kxd_scale=np.array([2.0,1.5,2.0,1.0,1.0,1.0]),
-                    verbose=False,
                     receive_latency=rc['robot_obs_latency']
                 )
             elif rc['robot_type'].startswith('xarm'):
@@ -505,12 +495,11 @@ class BimanualUmiEnv:
                 g_latency = .1
                 r_actions = new_actions[i, 7 * robot_idx + 0: 7 * robot_idx + 6]
                 g_actions = new_actions[i, 7 * robot_idx + 6]
-                
                 # For xArm robots with integrated gripper control
                 if rc['robot_type'].startswith('xarm'):
                     # Schedule arm waypoint
                     robot.schedule_waypoint(
-                        pose=r_actions,
+                        pose=new_actions[i],
                         target_time=new_timestamps[i] - r_latency
                     )
                 else:
