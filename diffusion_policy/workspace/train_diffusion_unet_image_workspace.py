@@ -303,7 +303,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                     B, T, _ = pred_action.shape
                     pred_action = pred_action.view(B, T, -1, 10)
                     gt_action = gt_action.view(B, T, -1, 10)
-                    import pdb; pdb.set_trace()
+                    # import pdb; pdb.set_trace()
                     step_log[f'{category}_action_mse_error'] = torch.nn.functional.mse_loss(pred_action, gt_action).item()
                     step_log[f'{category}_action_mse_error_pos'] = torch.nn.functional.mse_loss(pred_action[..., :3], gt_action[..., :3]).item()
                     step_log[f'{category}_action_mse_error_rot'] = torch.nn.functional.mse_loss(pred_action[..., 3:9], gt_action[..., 3:9]).item()
