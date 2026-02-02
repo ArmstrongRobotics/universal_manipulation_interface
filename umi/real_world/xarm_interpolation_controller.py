@@ -11,6 +11,7 @@ from diffusion_policy.common.precise_sleep import precise_wait
 from umi.real_world.real_inference_util import (pose_to_mat,
                                                 mat_to_pose 
                                                 )
+from scipy.spatial.transform import Rotation as R
 
 class Command(enum.Enum):
     STOP = 0
@@ -134,7 +135,7 @@ class XArmInterpolationController(mp.Process):
         print("[XArmInterpolationController] Starting controller process with ip:", self.robot_ip)
         arm = XArmAPI(self.robot_ip)
         arm.motion_enable(enable=True)
-        arm.set_mode(1)
+        arm.set_mode(7)
         arm.set_state(0)
         
         # Initialize gripper
@@ -212,7 +213,12 @@ class XArmInterpolationController(mp.Process):
             # Send interpolated pose to xArm
             pose_command_mm = pose_command.copy()
             pose_command_mm[:3] = pose_command_mm[:3] * 1000.  # convert to mm
-            arm.set_servo_cartesian(pose_command_mm, speed=self.max_pos_speed, mvacc=None, mvtime=0, is_radian=True)
+            pose_command_mm_aa = pose_command_mm.copy()
+            # Convert euler angles to axis-angle for xArm API
+            r = R.from_euler('xyz', pose_command_mm[3:6], degrees=False)
+            axis_angle = r.as_rotvec()
+            pose_command_mm_aa[3:6] = axis_angle
+            arm.set_servo_cartesian_aa(pose_command_mm_aa, speed=self.max_pos_speed, mvacc=None, mvtime=0, is_radian=True)
             # Handle gripper control
             dt = 1 / self.frequency
             gripper_target_pos = gripper_interp(t_now)[0]
@@ -269,10 +275,10 @@ class XArmInterpolationController(mp.Process):
                 'TargetQ': np.zeros(7),  # Could be computed via IK if needed
                 'TargetQd': np.zeros(7),  # Could be computed from trajectory
                 'robot_timestamp': time.time() - self.receive_latency,
-                'gripper_state': 0,
-                'gripper_position': .051,
-                'gripper_velocity': gripper_velocity,
-                'gripper_force': 0,  # Use current as force approximation
+                'gripper_state': status_reg,
+                'gripper_position': gripper_position,
+                'gripper_velocity': 0,
+                'gripper_force': gripper_current,  # Use current as force approximation
                 'gripper_measure_timestamp': time.time(),
                 'gripper_receive_timestamp': time.time(),
                 'gripper_timestamp': time.time() - self.receive_latency
