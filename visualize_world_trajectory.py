@@ -1,3 +1,4 @@
+
 import sys
 import os
 import pickle
@@ -5,9 +6,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from umi.common.pose_util import pose_to_mat
+import argparse
+
+# Argument parser for input directory
+parser = argparse.ArgumentParser(description="Visualize world trajectory from dataset plan.")
+parser.add_argument('--input_dir', type=str, required=True, help='Directory containing dataset_plan.pkl')
+args = parser.parse_args()
 
 # Load the dataset plan (contains episode info)
-with open('/home/armstrong/umi/simple_demo_session/dataset_plan.pkl', 'rb') as f:
+plan_path = os.path.join(args.input_dir, 'dataset_plan.pkl')
+print("Loading dataset plan from:", plan_path)
+with open(plan_path, 'rb') as f:
     all_plans = pickle.load(f)
 
 # Choose an episode (e.g., the first one)
@@ -54,3 +63,4 @@ ax.set_zlabel('Z (m)')
 ax.set_title(f'Episode {episode_idx} Trajectory in World Frame')
 ax.legend()
 plt.show()
+wait = input("Press Enter to exit...")
