@@ -65,7 +65,7 @@ def main(session_dir, calibration_dir):
             ]
             result = subprocess.run(cmd)
             assert result.returncode == 0
-            assert map_path.is_file()
+            assert map_path.is_file(), f"{map_path} ({mapping_dir})"
 
         print("############# 03_batch_slam ###########")
         script_path = script_dir.joinpath("03_batch_slam.py")
