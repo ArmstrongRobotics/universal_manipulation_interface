@@ -510,8 +510,7 @@ def main(input_path, output, robot_config,
 
                         # deal with timing
                         # the same step actions are always the target for
-                        action_timestamps = (np.arange(len(action), dtype=np.float64)
-                            ) * dt + obs_timestamps[-1]
+                        action_timestamps = (np.arange(len(action), dtype=np.float64)) * dt + obs_timestamps[-1]
                         action_exec_latency = 0.01
                         curr_time = time.time()
                         is_new = action_timestamps > (curr_time + action_exec_latency)

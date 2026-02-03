@@ -155,7 +155,7 @@ class XArmInterpolationController(mp.Process):
         
         dt = 1. / self.frequency
         print("Printing initial robot pose:")
-        ret = arm.get_position(is_radian=True)
+        ret = arm.get_position_aa(is_radian=True)
         if ret[0] != 0:
             raise RuntimeError(f"Failed to get initial position, error code: {ret[0]}")
         curr_pose = np.array(ret[1][0:6])
@@ -180,7 +180,7 @@ class XArmInterpolationController(mp.Process):
         while keep_running:
 
             t_now = time.monotonic()
-            ret = arm.get_position(is_radian=True)
+            ret = arm.get_position_aa(is_radian=True)
             if ret[0] != 0:
                 raise RuntimeError(f"Failed to get initial position, error code: {ret[0]}")
             pose_command = pose_interp(t_now)
@@ -188,10 +188,6 @@ class XArmInterpolationController(mp.Process):
             pose_command_mm = pose_command.copy()
             pose_command_mm[:3] = pose_command_mm[:3] * 1000.  # convert to mm
             pose_command_mm_aa = pose_command_mm.copy()
-            # Convert euler angles to axis-angle for xArm API
-            r = R.from_euler('xyz', pose_command_mm[3:6], degrees=False)
-            axis_angle = r.as_rotvec()
-            pose_command_mm_aa[3:6] = axis_angle
             arm.set_position_aa(axis_angle_pose=pose_command_mm_aa, speed=self.max_pos_speed, is_radian=True, wait=False)
             # arm.set_servo_cartesian_aa(pose_command_mm_aa, speed=self.max_pos_speed, is_radian=True)
             # Handle gripper control
@@ -212,7 +208,7 @@ class XArmInterpolationController(mp.Process):
                 )
                 last_gripper_pos = gripper_target_pos
             # update robot state
-            ret = arm.get_position(is_radian=True)
+            ret = arm.get_position_aa(is_radian=True)
             if ret[0] != 0:
                 raise RuntimeError(f"Failed to get position, error code: {ret[0]}")
             curr_pose = np.array(ret[1][0:6])
