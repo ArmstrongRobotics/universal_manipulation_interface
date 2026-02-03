@@ -31,7 +31,18 @@ from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
 from accelerate import Accelerator
 
+from scipy.spatial.transform import Rotation as R
+import matplotlib.pyplot as plt
+
 OmegaConf.register_new_resolver("eval", eval, replace=True)
+
+
+def rot6d_to_rotmat(v1, v2):
+    v1 = v1 / np.linalg.norm(v1)
+    v2 = v2 - np.dot(v1, v2) * v1
+    v2 = v2 / np.linalg.norm(v2)
+    v3 = np.cross(v1, v2)
+    return np.column_stack((v1, v2, v3))
 
 class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
     include_keys = ['global_step', 'epoch']
@@ -101,11 +112,14 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
             )
 
         # resume training
-        if cfg.training.resume:
-            lastest_ckpt_path = self.get_checkpoint_path()
-            if lastest_ckpt_path.is_file():
-                accelerator.print(f"Resuming from checkpoint {lastest_ckpt_path}")
-                self.load_checkpoint(path=lastest_ckpt_path)
+        # if cfg.training.resume:
+        #     lastest_ckpt_path = self.get_checkpoint_path()
+        #     if lastest_ckpt_path.is_file():
+        #         accelerator.print(f"Resuming from checkpoint {lastest_ckpt_path}")
+        #         self.load_checkpoint(path=lastest_ckpt_path)
+        # lastest_ckpt_path = "/home/armstrong/latest.ckpt"
+        lastest_ckpt_path = "/armstrong_data/simple_cup_umi_b32.ckpt"
+        self.load_checkpoint(path=lastest_ckpt_path)
 
         # configure dataset
         dataset: BaseImageDataset
@@ -132,6 +146,10 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         self.model.set_normalizer(normalizer)
         if cfg.training.use_ema:
             self.ema_model.set_normalizer(normalizer)
+
+        for group in self.optimizer.param_groups:
+            if 'initial_lr' not in group:
+                group['initial_lr'] = group['lr']
 
         # configure lr scheduler
         lr_scheduler = get_scheduler(
@@ -227,6 +245,61 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                         
                         # always use the latest batch
                         train_sampling_batch = batch
+
+                        with torch.no_grad():
+                            self.model.eval()
+                            gt_action = batch['action']
+                            pred_action = self.model.predict_action(batch['obs'], None)['action_pred']
+                            # print(gt_action)
+                            # print(pred_action)
+                            # print(pred_action.shape)
+                            # print(batch['obs']['robot0_eef_pos'])
+                            # print(batch['obs']['camera0_rgb'].shape)
+                        
+                            vec = batch['obs']['robot0_eef_rot_axis_angle_wrt_start'][0][1].cpu().numpy()
+                            R_mat = rot6d_to_rotmat(vec[:3], vec[3:])
+                            rot = R.from_matrix(R_mat)
+                            euler = rot.as_euler('zyx', degrees=True)
+                            print("Observation angles (yaw, pitch, roll):", euler)
+
+                            np.set_printoptions(suppress=True, precision=6)  # suppress scientific notation, 6 decimal places
+                            for b in range(gt_action.shape[0]):
+                                for j in range(2):
+                                    temp = pred_action[b].cpu().numpy() if j == 0 else gt_action[b].cpu().numpy()
+                                    for i, pose in enumerate(temp):
+                                        if i != 15:
+                                            continue
+                                        pos = pose[:3]
+                                        euler = R.from_matrix(rot6d_to_rotmat(pose[3:6], pose[6:9])).as_euler("zyx", degrees=True)
+                                        yaw_deg, pitch_deg, roll_deg = euler[0], euler[1], euler[2]
+
+                                        if j == 0:
+                                            color = "\033[91m"  # Red for predicted
+                                            label = "Predicted"
+                                        else:
+                                            color = "\033[92m"  # Green for GT
+                                            label = "Ground Truth"
+
+                                        reset = "\033[0m"
+                                        print(f"\n{color}{label}:{reset}")
+                                        print(f"{color}Position: {pos}{reset}")
+                                        print(f"{color}Yaw (deg): {yaw_deg:.2f}{reset}")
+                                        print(f"{color}Pitch (deg): {pitch_deg:.2f}{reset}")
+                                        print(f"{color}Roll (deg): {roll_deg:.2f}{reset}")
+                                        print(f"{color}Gripper sep.: {pose[9]:.4f}{reset}")
+                                        
+                                fig = plt.figure(figsize=(6, 6))
+                                plt.imshow(np.clip(batch['obs']['camera0_rgb'][0, 1].cpu().numpy().transpose(1, 2, 0), 0, 1))
+                                # plt.set_title('Camera Image')
+                                plt.axis('off')
+                                plt.tight_layout()
+                                plt.savefig("/tmp/error.png")
+                                plt.close(fig)
+
+                                import pdb; pdb.set_trace()
+                                print("FOO")
+
+                            self.model.train()
 
                         # compute loss
                         raw_loss = self.model(batch)

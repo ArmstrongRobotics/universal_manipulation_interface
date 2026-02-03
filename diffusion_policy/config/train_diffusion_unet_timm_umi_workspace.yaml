@@ -117,7 +117,7 @@ ema:
 dataloader:
   batch_size: 32
   num_workers: 8
-  shuffle: True
+  shuffle: False
   pin_memory: True
   persistent_workers: True
   drop_last: True
@@ -154,7 +154,7 @@ training:
   device: "cuda:0"
   seed: 42
   debug: False
-  resume: False
+  resume: True
   # optimization
   lr_scheduler: cosine
   lr_warmup_steps: 2000
@@ -176,7 +176,7 @@ training:
   # misc
   tqdm_interval_sec: 1.0
 
-enable_wandb: True
+enable_wandb: False
 
 logging:
   project: umi
