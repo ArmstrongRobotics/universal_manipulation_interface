@@ -164,31 +164,11 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
             output_dir=self.output_dir)
         assert isinstance(env_runner, BaseImageRunner)
 
-        # # configure logging
-        # if cfg.enable_wandb:
-        #     wandb_run = wandb.init(
-        #         dir=str(self.output_dir),
-        #         config=OmegaConf.to_container(cfg, resolve=True),
-        #         **cfg.logging
-        #     )
-        #     wandb.config.update(
-        #         {
-        #             "output_dir": self.output_dir,
-        #         }
-        #     )
-
         # configure checkpoint
         topk_manager = TopKCheckpointManager(
             save_dir=os.path.join(self.output_dir, 'checkpoints'),
             **cfg.checkpoint.topk
         )
-
-        # device transfer
-        # device = torch.device(cfg.training.device)
-        # self.model.to(device)
-        # if self.ema_model is not None:
-        #     self.ema_model.to(device)
-        # optimizer_to(self.optimizer, device)
 
         # accelerator
         train_dataloader, val_dataloader, self.model, self.optimizer, lr_scheduler = accelerator.prepare(
