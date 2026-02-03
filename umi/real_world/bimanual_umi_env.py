@@ -9,7 +9,6 @@ from multiprocessing.managers import SharedMemoryManager
 # from umi.real_world.wsg_controller import WSGController  # Comment out if not using WSG grippers
 #from umi.real_world.franka_interpolation_controller import FrankaInterpolationController
 from umi.real_world.xarm_interpolation_controller import XArmInterpolationController
-from umi.real_world.xarm_interpolation_controller_sync import XArmInterpolationControllerSync
 from umi.real_world.multi_uvc_camera import MultiUvcCamera, VideoRecorder
 from diffusion_policy.common.timestamp_accumulator import (
     TimestampActionAccumulator,
