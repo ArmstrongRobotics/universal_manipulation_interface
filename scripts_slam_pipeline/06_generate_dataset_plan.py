@@ -763,7 +763,7 @@ def main(input, output, tcp_offset, tx_slam_tag,
             })
 
     used_ratio = total_used_time / total_avaliable_time
-    print(f"{int(used_ratio*100)}% of raw data are used.")
+    print(f"\n\n\033[91m{int(used_ratio*100)}% of raw data are used, {int((len(all_plans) / len(video_dirs))*100)}% ({len(all_plans)} / {len(video_dirs)}) of episodes are used.\033[0m\n\n")
 
     print(dropped_camera_count)
     print("n_dropped_demos", n_dropped_demos)

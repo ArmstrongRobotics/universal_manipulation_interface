@@ -137,11 +137,15 @@ def main(input_dir, map_path, docker_image, num_workers, max_lost_frames, timeou
                     cmd, str(video_dir), stdout_path, stderr_path, timeout))
                 # print(' '.join(cmd))
 
+                if not video_dir.joinpath('camera_trajectory.csv').is_file():
+                    print(f"\033[91mSLAM FAILED: {video_dir}\033[0m")
+
             completed, futures = concurrent.futures.wait(futures)
             pbar.update(len(completed))
 
     print("Done! Result:")
     print([x.result() for x in completed])
+    print(f"\n\n\033[92mSLAM succeeded on: {len(completed)} / {len(input_video_dirs)} ({len(completed) / len(input_video_dirs)}%) demonstrations\033[0m\n\n")
 
 # %%
 if __name__ == "__main__":
